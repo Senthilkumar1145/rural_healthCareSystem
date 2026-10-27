@@ -2,7 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const mongoose = require('mongoose');
+const dns = require('dns');
 require('dotenv').config({ override: true });
+
+// Ensure reliable DNS resolution for MongoDB Atlas SRV connection strings on Windows networks
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch (dnsErr) {
+  // Use default system DNS if custom nameservers are not permitted
+}
 
 // Ensure fallback JWT secret if not configured in environment
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-healthcare-jwt-key-2026';
@@ -132,7 +140,7 @@ app.post('/api/database/connect-mongo', async (req, res) => {
     if (mongoose.connection && mongoose.connection.readyState !== 0) {
       await mongoose.disconnect();
     }
-    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 8000 });
+    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 15000 });
 
     // Save to .env
     const envPath = path.join(__dirname, '.env');
@@ -263,17 +271,29 @@ app.get(['/data/database.json', '/backend/data/database.json', '/api/database/do
 });
 
 // Database Connection Handling
-mongoose.set('bufferCommands', false);
 const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
 
-if (mongoUri && (mongoUri.startsWith('mongodb://') || mongoUri.startsWith('mongodb+srv://')) && !mongoUri.includes('<username>')) {
-  mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 2000 })
-    .then(() => console.log('MongoDB Connected Successfully to:', mongoUri.split('@').pop()))
-    .catch((err) => {
-      console.warn(`MongoDB not accessible (${err.message}) — using persistent file-based database`);
+async function initMongoConnection(uri) {
+  if (!uri || (!uri.startsWith('mongodb://') && !uri.startsWith('mongodb+srv://')) || uri.includes('<username>')) {
+    console.log('[Database] Using persistent file-based database (data/database.json)');
+    return;
+  }
+
+  try {
+    const isAtlas = uri.startsWith('mongodb+srv://');
+    console.log(`[Database] Connecting to ${isAtlas ? 'MongoDB Atlas Cloud' : 'MongoDB'}...`);
+    await mongoose.connect(uri, {
+      serverSelectionTimeoutMS: 15000
     });
-} else {
-  console.log('Using persistent file-based database (backend/data/database.json)');
+    console.log(`[Database] MongoDB Connected Successfully!`);
+    console.log(`[Database] Host: ${mongoose.connection.host}`);
+    console.log(`[Database] Database: ${mongoose.connection.name}`);
+
+    // Auto-migrate seed data to cloud database if not already present
+    await migrateJsonToMongo();
+  } catch (err) {
+    console.warn(`[Database] MongoDB connection error (${err.message}) — falling back to persistent file store`);
+  }
 }
 
 // Error middleware for handling Mongoose connection drops gracefully
@@ -322,6 +342,9 @@ function findAvailablePort(startPort, host = '0.0.0.0', maxAttempts = 20) {
 }
 
 async function startServer() {
+  // Connect to MongoDB Atlas or local MongoDB before starting HTTP listener
+  await initMongoConnection(mongoUri);
+
   if (process.env.NODE_ENV === 'production') {
     const distPath = path.join(__dirname, 'frontend/dist');
     const indexPath = path.join(distPath, 'index.html');

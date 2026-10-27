@@ -1,7 +1,14 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const dns = require('dns');
 require('dotenv').config();
+
+// Ensure reliable DNS resolution for MongoDB Atlas SRV connection strings on Windows networks
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch (dnsErr) {}
+
 const { bookAppointment, getAppointments } = require('./controllers/appointmentController');
 const { verifyToken } = require('./middleware/authMiddleware');
 // Import Routes
@@ -35,7 +42,6 @@ app.use(cors());
 app.use('/api/auth', authRoutes);
 app.use('/api/doctors', doctorRoutes);
 app.use('/api/appointments', appointmentRoutes);
-//app.use('/api/appointments', appointmentRoutes);
 
 // Register under API routes
 app.use('/api/consultations', consultationRoutes);
@@ -51,9 +57,9 @@ app.use('/api/centres', centreRoutes);
 
 // Database Connection
 const mongoURI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/rural_healthcare';
-mongoose.connect(mongoURI)
-  .then(() => console.log('MongoDB Connected Successfully'))
-  .catch((err) => console.log('Database connection error: ', err));
+mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 15000 })
+  .then(() => console.log('MongoDB Connected Successfully to:', mongoose.connection.name))
+  .catch((err) => console.log('Database connection error: ', err.message));
 
 
 
